@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <style>
+            /*general layout*/
+            #result {
+                text-align: center;
+            }
+
+            #turn {
+                text-align: center;
+            }
+
+            #board {
+                border:solid 3px black;
+                margin:0 auto;
+                display: flex;
+                flex-wrap: wrap;
+            }
+
+            #board-expanded {
+                display: flex;
+                width: 560px;
+                margin:0 auto;
+            }
+
+            .sidebar {
+                border:solid 3px black;
+                margin:0 auto;
+                display: flex;
+                flex-wrap: wrap;
+                flex-direction: column;
+            }
+
+            #promotion-bar {
+                border:solid 3px black;
+                margin:0 auto;
+                margin-bottom: 5px;
+                display: flex;
+                flex-wrap: wrap;
+                flex-direction: row;
+
+                height: 53px;
+            }
+
+            /*squares*/
+            .square {
+                width: 53px;
+                height: 53px;
+                margin: 0px;
+                padding: 0px;
+                border: 0px;
+                max-width: 53px;
+                max-height: 53px;
+                
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+
+            .square.marked {
+                box-shadow: 0 3px 0 #f00 inset,
+                            3px 0 0 #f00 inset,
+                            0 -3px 0 #f00 inset,
+                            -3px 0 0 #f00 inset;
+            }
+
+            .square.black {
+                background: #b58863;
+            }
+
+            .square.white {
+                background: #f0d9b5;
+            }
+
+            .square.promotion {
+                cursor: pointer;
+            }
+
+            /*square selections*/
+            .square.selected {
+                box-shadow: 0 3px 0 #000 inset,
+                            3px 0 0 #000 inset,
+                            0 -3px 0 #000 inset,
+                            -3px 0 0 #000 inset;
+            }
+
+            .square.selected.top {
+                box-shadow: 3px 0 0 #000 inset,
+                            0 -3px 0 #000 inset,
+                            -3px 0 0 #000 inset;
+            }
+
+            .square.selected.left {
+                box-shadow: 0 3px 0 #000 inset,
+                            0 -3px 0 #000 inset,
+                            -3px 0 0 #000 inset;
+            }
+
+            .square.selected.bottom {
+                box-shadow: 0 3px 0 #000 inset,
+                            3px 0 0 #000 inset,
+                            -3px 0 0 #000 inset;
+            }
+
+            .square.selected.right {
+                box-shadow: 0 3px 0 #000 inset,
+                            3px 0 0 #000 inset,
+                            0 -3px 0 #000 inset;
+            }
+
+            .square.selected.top-left {
+                box-shadow: 0 -3px 0 #000 inset,
+                            -3px 0 0 #000 inset;
+            }
+
+            .square.selected.top-right {
+                box-shadow: 0 -3px 0 #000 inset,
+                            3px 0 0 #000 inset;
+            }
+
+            .square.selected.bottom-left {
+                box-shadow: 0 3px 0 #000 inset,
+                            -3px 0 0 #000 inset;
+            }
+
+            .square.selected.bottom-right {
+                box-shadow: 0 3px 0 #000 inset,
+                            3px 0 0 #000 inset;
+            }
+
+            /*markings*/
+            .dot-active {
+                height: 15px;
+                width: 15px;
+                background-color: rgba(85, 85, 85, 0.8);
+                border-radius: 50%;
+                display: inline-block;
+            }
+
+            .has-indicator {
+                cursor: pointer;
+            }
+
+            /*other flags*/
+            .hidden {
+                display: none !important;
+            }
+
+            .clickable {
+                cursor: pointer;
+            }
+        </style>
+        <script type="text/javascript" src="{{ STATIC_URL }} /static/jquery-3.6.0.min.js"></script>
+    </head>
+    <body>
+        {% load static %}
+
+        <div id="turn">
+            <h3><span id="turn-text"></span>'s Turn</h3>
+        </div>
+
+        <div id="result" class="hidden">
+            <h3>Game Result: <span id="result-text"></span></h3>
+        </div>
+
+        <div id="promotion-bar" class="hidden"></div>
+
+        <div id="board-expanded">
+            <div class="sidebar" id="white-sidebar" data-size="0"></div>
+            <div id="board"></div>
+            <div class="sidebar" id="black-sidebar" data-size="0"></div>
+        </div>
+
+        <script>
+            var startFEN = "r8r/1nbqkcabn1/pppppppppp/91/91/91/91/PPPPPPPPPP/1NBQKCABN1/R8R";
+            var currentFEN = startFEN;
+
+            //initial information
+            var height = 10;
+            var width = 10;
+            var playerWhite = true;
+            var startBoard = getBoardArray(startFEN);
+
+            var whitePieceSet = ["P", "K", "B", "N", "R", "A", "C", "Q"];
+            var blackPieceSet = ["P", "K", "B", "N", "R", "A", "C", "Q"];
+
+            var player = "{{ request.user.username }}";
+            if(player === "player1") {
+                playerWhite = true;
+            } else {
+                playerWhite = false;
+            }
+
+            var playerColor = playerWhite ? "white" : "black";
+
+            //turn-by-turn information
+            var whiteTurn = true;
+            var currentBoard = getBoardArray(currentFEN);
+
+            var whiteSidebar = new Array(0);
+            var blackSidebar = new Array(0);
+
+            var masterProfileKey;
+            var masterProfile;
+
+            //communications
+            const chatSocket = new WebSocket("ws://" + window.location.host + "/");     
+
+            function sendMessage(toMirror) {
+                chatSocket.send(JSON.stringify({
+                    playerID: player,
+                    mirror: toMirror,
+                    wTurn: whiteTurn,
+                    newBoard: currentBoard,
+                    wSidebar: whiteSidebar,
+                    bSidebar: blackSidebar
+                }));
+            }
+
+            function mirrorState(toMirror) {
+                console.log("mirror sent");
+                sendMessage(false);
+            }
+
+            function requestMirror() {
+                console.log("mirror requested");
+                sendMessage(true);
+            }
+
+            chatSocket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                var mirrorRequested = data.mirror;
+                var sender = data.playerID;
+
+                if(mirrorRequested && !(sender === player)) {
+                    console.log("mirror request received");
+                    mirrorState();
+                } else {
+                    console.log("mirror received");
+                    whiteTurn = data.wTurn;
+                    currentBoard = data.newBoard;
+                    whiteSidebar = data.wSidebar;
+                    blackSidebar = data.bSidebar;
+
+                    updateAll();
+                }
+            };
+
+            //update everything
+            function updateAll() {
+                removeAllIndicators();
+                removeSelection();
+                changePieces(currentBoard);
+                var masterProfileData = getCurrentMasterProfile(whiteTurn);
+                masterProfileKey = masterProfileData[0];
+                masterProfile = masterProfileData[1];
+
+                toggleClickable();
+                updateSidebarView();
+                updateTurn();
+
+                updateGameStatus();
+
+                console.log(currentBoard);
+            }
+
+            //comparison helpers
+            var pieceOrdering = ["P", "F", "V", "B", "N", "M", "R", "A", "C", "Q", "D"];
+            function comparePieces(piece1, piece2) {
+                return pieceOrdering.indexOf(piece2) - pieceOrdering.indexOf(piece1);
+            }
+
+            //regex helpers
+            function isAlphaUpper(ch){
+                return /^[A-Z]+$/.test(ch);
+            }
+
+            function isAlphaLower(ch){
+                return /^[a-z]+$/.test(ch);
+            }
+
+            function extractCoords(id) {
+                var rowIndex = id.indexOf("r");
+                var colIndex = id.indexOf("c");
+
+                return [parseInt(id.substring(rowIndex+1, colIndex)),
+                        parseInt(id.substring(colIndex+1))]
+            }
+
+            function extractRow(id) {
+                return extractCoords(id)[0];
+            }
+
+            function extractCol(id) {
+                return extractCoords(id)[1];
+            }
+
+            //templates
+            function boardSquare(color, row, col) {
+                return `<div class = "square ${color}" id="r${row}c${col}"></div>`;
+            }
+
+            function chessPiece(piece) {
+                return `<img src="static/pieces/${piece}.svg">`;
+            }
+
+            function sidebarSquare(piece) {
+                return `<div class = "square">` + chessPiece(piece) + `</div>`;
+            }
+
+            function promotionSquare(piece) {
+                return `<div class = "square promotion">` + chessPiece(piece) + `</div>`;
+            }
+
+            function dot() {
+                return `<span class="dot-inactive"></span>`;
+            }
+
+            //board construction
+            var board = $("#board").get(0);
+            function constructBoard(isWhite) {
+                board.style.height = 53*height + "px";
+                board.style.width = 53*width + "px";
+
+                var color;
+                if(isWhite) {
+                    for(var r = height-1; r >= 0; r--) {
+                        for(var c = 0; c < width; c++) {
+                            if(r % 2 == 0) {
+                                color = (c % 2 === 0 ? "white" : "black");
+                            } else {
+                                color = (c % 2 === 0 ? "black" : "white");
+                            }
+                            board.insertAdjacentHTML("beforeend", boardSquare(color, r, c));
+                            $(`#r${r}c${c}`).get(0).insertAdjacentHTML("beforeend", dot());
+                        }
+                    }
+                } else {
+                    for(var r = 0; r < height; r++) {
+                        for(var c = width-1; c >= 0; c--) {
+                            if(r % 2 == 0) {
+                                color = (c % 2 === 0 ? "white" : "black");
+                            } else {
+                                color = (c % 2 === 0 ? "black" : "white");
+                            }
+                            board.insertAdjacentHTML("beforeend", boardSquare(color, r, c));
+                            $(`#r${r}c${c}`).get(0).insertAdjacentHTML("beforeend", dot());
+                        }
+                    }
+                }
+            }
+
+            //upper bar management
+            function updateTurn() {
+                var turnColor = whiteTurn ? "White" : "Black";
+                $("#turn-text").get(0).innerHTML = turnColor;
+            }
+
+            //promotion bar
+            function constructPromotionBar() {
+                var promotionBar = $("#promotion-bar").get(0);
+                var barPieces = 0;
+
+                var piece;
+                if(playerWhite) {
+                    for(var i = 0; i < whitePieceSet.length; i++) {
+                        if(whitePieceSet[i] === "P" || whitePieceSet[i] === "K") {
+                            continue;
+                        } else {
+                            piece = "w" + whitePieceSet[i];
+                            promotionBar.insertAdjacentHTML("beforeend", promotionSquare(piece));
+                            barPieces += 1;
+                        }
+                    }
+                } else {
+                    for(var i = 0; i < blackPieceSet.length; i++) {
+                        if(blackPieceSet[i] === "P" || blackPieceSet[i] === "K") {
+                            continue;
+                        } else {
+                            piece = "b" + blackPieceSet[i].toLowerCase();
+                            promotionBar.insertAdjacentHTML("beforeend", promotionSquare(piece));
+                            barPieces += 1;
+                        }
+                    }
+                }
+                promotionBar.style.width = 53*barPieces + "px";
+            }
+
+            function showPromotionBar() {
+                $("#promotion-bar").removeClass("hidden");
+            }
+
+            function hidePromotionBar() {
+                $("#promotion-bar").addClass("hidden");
+            }
+
+            //board management
+            var pieceRegex = new RegExp("[a-z][A-Z]");
+            function getBoardArray(FEN) {
+                var FENRows = FEN.split("/");
+                var boardArray = new Array(height);
+                for(var r = 0; r < height; r++) {
+                    boardArray[r] = FENRows[r].split("");
+                }
+                boardArray.reverse();
+
+                //build board state array
+                var piece;
+                for(var r = 0; r < height; r++) {
+                    var newRow = new Array(width);
+                    var colIndex = 0;
+
+                    for(var c = 0; c < boardArray[r].length; c++) {
+                        piece = boardArray[r][c];
+                        if(isAlphaLower(piece)) {
+                            piece = "b" + piece.toUpperCase();
+                            newRow[colIndex] = piece;
+                            colIndex++;
+                        } else if(isAlphaUpper(piece)) {
+                            piece = "w" + piece.toUpperCase();
+                            newRow[colIndex] = piece;
+                            colIndex++;
+                        } else {
+                            var toAdd = parseInt(piece);
+                            for(var i = 0; i < toAdd; i++) {
+                                newRow[colIndex] = "";
+                                colIndex++;
+                            }
+                        }
+                    }
+
+                    boardArray[r] = newRow;
+                }
+
+                return boardArray;
+            }
+
+            function changePieces(boardArray) {
+                //populate with info
+                var activeSquare;
+                for(var r = 0; r < height; r++) {
+                    for(var c = 0; c < width; c++) {
+                        activeSquare = $(`#r${r}c${c}`).get(0);
+                        $(`#r${r}c${c}`).find("img").remove();
+
+                        activeSquare.classList.remove("blackPiece");
+                        activeSquare.classList.remove("whitePiece");
+                        activeSquare.classList.remove("wK");
+                        activeSquare.classList.remove("bK");
+                        if(!(boardArray[r][c] === "")) {
+                            activeSquare.insertAdjacentHTML('beforeend', chessPiece(boardArray[r][c]));
+                            if(boardArray[r][c].charAt(0) === "b") {
+                                activeSquare.classList.add("blackPiece");
+                            } else {
+                                activeSquare.classList.add("whitePiece");
+                            }
+
+                            if((boardArray[r][c] === "wK") || (boardArray[r][c] === "bK")) {
+                                activeSquare.classList.add(boardArray[r][c]);
+                            }
+                        }
+                        activeSquare.dataset.piece = boardArray[r][c];
+                    }
+                }
+            }
+
+            function makeMove(boardArray, startRow, startCol, endRow, endCol) {
+                var startPiece = boardArray[startRow][startCol];
+                var endPiece = boardArray[endRow][endCol];
+
+                boardArray[endRow][endCol] = startPiece;
+                boardArray[startRow][startCol] = "";
+
+                if(!(endPiece === "")) {
+                    if(endPiece.charAt(0) === "w") {
+                        whiteSidebar.push(endPiece.charAt(1));
+                        whiteSidebar.sort(comparePieces);
+                    } else {
+                        blackSidebar.push(endPiece.charAt(1));
+                        blackSidebar.sort(comparePieces);
+                    }
+                }
+
+                if(startPiece === "wK" || startPiece === "bK") {
+                    $(`#r${startRow}c${startCol}`).removeClass(startPiece);
+                    $(`#r${endRow}c${endCol}`).addClass(startPiece);
+                }
+
+                return boardArray;
+            }
+
+            function simulateMove(boardArray, startRow, startCol, endRow, endCol) {
+                var startPiece = boardArray[startRow][startCol];
+                var endPiece = boardArray[endRow][endCol];
+
+                boardArray[endRow][endCol] = startPiece;
+                boardArray[startRow][startCol] = "";
+
+                return boardArray;
+            }
+
+            function makeBoardCopy(boardArray) {
+                var boardCopy = new Array(0);
+                for(var r = 0; r < height; r++) {
+                    boardCopy.push(new Array(width));
+                    for(var c = 0; c < width; c++) {
+                        boardCopy[r][c] = currentBoard[r][c];
+                    }
+                }
+                return boardCopy;
+            }
+
+            //dot / mark management
+            function addAllIndicators(profile) {
+                for(var r = 0; r < height; r++) {
+                    for(var c = 0; c < width; c++) {
+                        if(profile[r][c]) {
+                            addIndicator(r,c);
+                        } else {
+                            removeIndicator(r,c);
+                        }
+                    }
+                }
+            }
+
+            function removeAllIndicators(profile) {
+                for(var r = 0; r < height; r++) {
+                    for(var c = 0; c < width; c++) {
+                        removeIndicator(r,c);
+                    }
+                }
+            }
+
+            function addIndicator(row, col) {
+                $(`#r${row}c${col}`).addClass("has-indicator");
+                if(occupied(currentBoard, row, col)) {
+                    addMark(row, col);
+                    removeDot(row, col);
+                } else {
+                    addDot(row, col);
+                    removeMark(row, col);
+                }
+            }
+
+            function removeIndicator(row, col) {
+                $(`#r${row}c${col}`).removeClass("has-indicator");
+                removeDot(row, col);
+                removeMark(row, col);
+            }
+
+            function addMark(row, col) {
+                var square = $(`#r${row}c${col}`);
+                square.addClass("marked");
+            }
+
+            function removeMark(row, col) {
+                var square = $(`#r${row}c${col}`);
+                square.removeClass("marked");
+            }
+
+            function addDot(row, col) {
+                var dot = $(`#r${row}c${col}`).find("span").get(0);
+                dot.className = dot.className.replace("dot-inactive", "dot-active");
+            }
+
+            function removeDot(row, col) {
+                var dot = $(`#r${row}c${col}`).find("span").get(0);
+                dot.className = dot.className.replace("dot-active", "dot-inactive");
+            }
+
+            //square selection
+            function toggleClickable() {
+                removeClickable();
+
+                if(whiteTurn == playerWhite) {
+                    $(`.${playerColor}Piece`).each(function() {
+                        $(this).addClass("clickable");
+                    });
+                }
+            }
+
+            function removeClickable() {
+                $(".clickable").each(function() {
+                    $(this).removeClass("clickable");
+                });
+            }
+
+            function selectSquare(row, col) {
+                $(".selected").each(function() {
+                    $(this).removeClass("selected");
+                });
+
+                $(`#r${row}c${col}`).addClass("selected");
+
+                var extraClass = "";
+                if(playerWhite) {
+                    if(row == 0) {
+                        extraClass += "bottom";
+                    } else if(row == height-1) {
+                        extraClass += "top";
+                    }
+
+                    if(col == 0) {
+                        if(!(extraClass === "")) {
+                            extraClass += "-";
+                        }
+                        extraClass += "left";
+                    } else if(col == width-1) {
+                        if(!(extraClass === "")) {
+                            extraClass += "-";
+                        }
+                        extraClass += "right";
+                    }
+                } else {
+                    if(row == 0) {
+                        extraClass += "top";
+                    } else if(row == height-1) {
+                        extraClass += "bottom";
+                    }
+
+                    if(col == 0) {
+                        if(!(extraClass === "")) {
+                            extraClass += "-";
+                        }
+                        extraClass += "right";
+                    } else if(col == width-1) {
+                        if(!(extraClass === "")) {
+                            extraClass += "-";
+                        }
+                        extraClass += "left";
+                    }
+                }
+
+                $(`#r${row}c${col}`).addClass(extraClass);
+            }
+
+            function removeSelection() {
+                $(".selected").each(function() {
+                    $(this).removeClass("selected");
+                });
+            }
+
+            //sidebar management
+            function constructBoardContainer(whiteSidebarWidth, blackSidebarWidth) {
+                var totalWidth = width + whiteSidebarWidth + blackSidebarWidth;
+
+                var boardExpanded = $("#board-expanded").get(0);
+                var whiteSidebar = $("#white-sidebar").get(0);
+                var blackSidebar = $("#black-sidebar").get(0);
+
+                boardExpanded.style.width = (53*totalWidth + 30) + "px";
+                whiteSidebar.style.width = 53*whiteSidebarWidth + "px";
+                blackSidebar.style.width = 53*blackSidebarWidth + "px";
+
+                boardExpanded.style.height = 53*height + "px";
+                whiteSidebar.style.height = 53*height + "px";
+                blackSidebar.style.height = 53*height + "px";
+
+                boardExpanded.style.paddingLeft = "0px";
+                boardExpanded.style.paddingRight = "0px";
+                if(whiteSidebarWidth < blackSidebarWidth) {
+                    boardExpanded.style.paddingLeft = 53*(blackSidebarWidth-whiteSidebarWidth) + "px";
+                } else if(blackSidebarWidth < whiteSidebarWidth) {
+                    boardExpanded.style.paddingRight = 53*(whiteSidebarWidth-blackSidebarWidth) + "px";
+                }
+            }
+
+            function addSidebarPiece(piece) {
+                var whiteSidebarElement = $("#white-sidebar").get(0);
+                var blackSidebarElement = $("#black-sidebar").get(0);
+
+                if(piece.charAt(0) === "w") {
+                    whiteSidebarElement.insertAdjacentHTML("beforeend", sidebarSquare(piece));
+                    whiteSidebarElement.dataset.size = parseInt(whiteSidebarElement.dataset.size) + 1;
+                } else {
+                    blackSidebarElement.insertAdjacentHTML("beforeend", sidebarSquare(piece));
+                    blackSidebarElement.dataset.size = parseInt(blackSidebarElement.dataset.size) + 1;
+                }
+            }
+
+            function updateSidebarView() {
+                $(".sidebar").find("div").remove();
+
+                var whiteSidebarElement = $("#white-sidebar").get(0);
+                var blackSidebarElement = $("#black-sidebar").get(0);
+                whiteSidebarElement.dataset.size = 0;
+                blackSidebarElement.dataset.size = 0;
+
+                for(var i = 0; i < whiteSidebar.length; i++) {
+                    addSidebarPiece("w" + whiteSidebar[i]);
+                }
+                for(var i = 0; i < blackSidebar.length; i++) {
+                    addSidebarPiece("b" + blackSidebar[i]);
+                }
+
+                var whiteSidebarSize = whiteSidebarElement.dataset.size;
+                var blackSidebarSize = blackSidebarElement.dataset.size;
+                constructBoardContainer(Math.max(1,Math.ceil(whiteSidebarSize / height)), 
+                                        Math.max(1,Math.ceil(blackSidebarSize / height)));
+            }
+
+            //move profiling utilities
+            function getMoveProfile() {
+                var profile = new Array(height);
+                for(var r = 0; r < height; r++) {
+                    profile[r] = new Array(width);
+                    for(var c = 0; c < width; c++) {
+                        profile[r][c] = false;
+                    }
+                }
+
+                return profile;
+            }
+
+            function inBounds(row, col) {
+                var rowInBounds = (row >= 0) && (row < height);
+                var colInBounds = (col >= 0) && (col < width);
+                return rowInBounds && colInBounds;
+            }
+
+            function whiteOccupied(boardArray, row, col) {
+                return !(boardArray[row][col] === "") && boardArray[row][col].charAt(0) === "w";
+            }
+
+            function blackOccupied(boardArray, row, col) {
+                return !(boardArray[row][col] === "") && boardArray[row][col].charAt(0) === "b";
+            }
+
+            function occupied(boardArray, row, col) {
+                return whiteOccupied(boardArray, row, col) || blackOccupied(boardArray, row, col);
+            }
+
+            //endgame
+            function inCheck(boardArray, isWhite) {
+                var kingRow; var kingCol;
+                for(var r = 0; r < height; r++) {
+                    for(var c = 0; c < width; c++) {
+                        if(isWhite && boardArray[r][c] === "wK") {
+                            kingRow = r; kingCol = c;
+                        }
+                        if(!isWhite && boardArray[r][c] === "bK") {
+                            kingRow = r; kingCol = c;
+                        }
+                    }
+                }
+
+                var profile = getCombinedProfile(boardArray, !isWhite);
+                return profile[kingRow][kingCol];
+            }
+
+            function noMoves() {
+                for(var i = 0; i < masterProfileKey.length; i++) {
+                    for(var r = 0; r < height; r++) {
+                        for(var c = 0; c < width; c++) {
+                            if(masterProfile[i][r][c]) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                return true;
+            }
+
+            function checkmated() {
+                return noMoves() && inCheck(currentBoard, whiteTurn);
+            }
+
+            function stalemated() {
+                return noMoves() && !inCheck(currentBoard, whiteTurn);
+            }
+
+            function updateGameStatus() {
+                if(checkmated()) {
+                    removeSelection();
+                    removeAllIndicators();
+                    removeClickable();
+                    checkmateAnnouncement(!whiteTurn);
+                } else if(stalemated()) {
+                    removeSelection();
+                    removeAllIndicators();
+                    removeClickable();
+                    stalemateAnnouncement();
+                }
+            }
+
+            function checkmateAnnouncement(whiteVictory) {
+                var winningColor = whiteVictory ? "White" : "Black";
+                $("#turn").addClass("hidden");
+                $("#result").removeClass("hidden");
+                $("#result-text").get(0).innerHTML = `${winningColor} Victory`;
+            }
+
+            function stalemateAnnouncement() {
+                $("#turn").addClass("hidden");
+                $("#result").removeClass("hidden");
+                $("#result-text").get(0).innerHTML = "Stalemate";
+            }
+
+            //piece move fetchers
+            function getPawnMoves(boardArray, profile, row, col, isWhite) {
+                var direction; var friendlyOccupied; var enemyOccupied;
+                if(isWhite) {
+                    direction = 1;
+                    friendlyOccupied = whiteOccupied;
+                    enemyOccupied = blackOccupied;
+                } else {
+                    direction = -1;
+                    friendlyOccupied = blackOccupied;
+                    enemyOccupied = whiteOccupied;
+                }
+
+                var goalRow = row + direction;
+                if(inBounds(goalRow, col-1) && enemyOccupied(boardArray, goalRow, col-1)) {
+                    profile[goalRow][col-1] = true;
+                }
+                if(inBounds(goalRow, col+1) && enemyOccupied(boardArray, goalRow, col+1)) {
+                    profile[goalRow][col+1] = true;
+                }
+
+                if(inBounds(goalRow, col) && !occupied(boardArray, goalRow, col)) {
+                    profile[goalRow][col] = true;
+
+                    var goalRow2 = goalRow + direction;
+                    if(startBoard[row][col].charAt(1) == "P" && inBounds(goalRow2, col) && !occupied(boardArray, goalRow2, col)) {
+                        profile[goalRow2][col] = true;
+                    }
+                }
+
+                return profile;
+            }
+
+            function getBishopMoves(boardArray, profile, row, col, isWhite) {
+                var friendlyOccupied; var enemyOccupied;
+                if(isWhite) {
+                    friendlyOccupied = whiteOccupied;
+                    enemyOccupied = blackOccupied;
+                } else {
+                    friendlyOccupied = blackOccupied;
+                    enemyOccupied = whiteOccupied;
+                }
+
+                var directions = [
+                    [ 1,  1],
+                    [ 1, -1],
+                    [-1,  1],
+                    [-1, -1]
+                ]
+
+                for(var d = 0; d < directions.length; d++) {
+                    var nextRow; var nextCol;
+                    var i = 1;
+                    while(true) {
+                        nextRow = row + i*directions[d][0];
+                        nextCol = col + i*directions[d][1];
+                        if(!inBounds(nextRow, nextCol) || friendlyOccupied(boardArray, nextRow, nextCol)) {
+                            break;
+                        } else if(enemyOccupied(boardArray, nextRow, nextCol)) {
+                            profile[nextRow][nextCol] = true;
+                            break;
+                        } else {
+                            profile[nextRow][nextCol] = true;
+                        }
+                        i++;
+                    }
+                }
+
+                return profile;
+            }
+
+            function getRookMoves(boardArray, profile, row, col, isWhite) {
+                var friendlyOccupied; var enemyOccupied;
+                if(isWhite) {
+                    friendlyOccupied = whiteOccupied;
+                    enemyOccupied = blackOccupied;
+                } else {
+                    friendlyOccupied = blackOccupied;
+                    enemyOccupied = whiteOccupied;
+                }
+
+                var directions = [
+                    [ 0,  1],
+                    [ 0, -1],
+                    [ 1,  0],
+                    [-1,  0]
+                ]
+
+                for(var d = 0; d < directions.length; d++) {
+                    var nextRow; var nextCol;
+                    var i = 1;
+                    while(true) {
+                        nextRow = row + i*directions[d][0];
+                        nextCol = col + i*directions[d][1];
+                        if(!inBounds(nextRow, nextCol) || friendlyOccupied(boardArray, nextRow, nextCol)) {
+                            break;
+                        } else if(enemyOccupied(boardArray, nextRow, nextCol)) {
+                            profile[nextRow][nextCol] = true;
+                            break;
+                        } else {
+                            profile[nextRow][nextCol] = true;
+                        }
+                        i++;
+                    }
+                }
+
+                return profile;
+            }
+
+            function getVizierMoves(boardArray, profile, row, col, isWhite) {
+                var friendlyOccupied; var enemyOccupied;
+                if(isWhite) {
+                    friendlyOccupied = whiteOccupied;
+                    enemyOccupied = blackOccupied;
+                } else {
+                    friendlyOccupied = blackOccupied;
+                    enemyOccupied = whiteOccupied;
+                }
+
+                var directions = [
+                    [ 1,  1],
+                    [ 1, -1],
+                    [-1,  1],
+                    [-1, -1]
+                ]
+
+                for(var d = 0; d < directions.length; d++) {
+                    var nextRow; var nextCol;
+                    
+                    nextRow = row + directions[d][0];
+                    nextCol = col + directions[d][1];
+                    if(inBounds(nextRow, nextCol) && !friendlyOccupied(boardArray, nextRow, nextCol)) {
+                        profile[nextRow][nextCol] = true;
+                    }
+                }
+
+                return profile;
+            }
+
+            function getFerzMoves(boardArray, profile, row, col, isWhite) {
+                var friendlyOccupied; var enemyOccupied;
+                if(isWhite) {
+                    friendlyOccupied = whiteOccupied;
+                    enemyOccupied = blackOccupied;
+                } else {
+                    friendlyOccupied = blackOccupied;
+                    enemyOccupied = whiteOccupied;
+                }
+
+                var directions = [
+                    [ 0,  1],
+                    [ 0, -1],
+                    [ 1,  0],
+                    [-1,  0]
+                ]
+
+                for(var d = 0; d < directions.length; d++) {
+                    var nextRow; var nextCol;
+                    
+                    nextRow = row + directions[d][0];
+                    nextCol = col + directions[d][1];
+                    if(inBounds(nextRow, nextCol) && !friendlyOccupied(boardArray, nextRow, nextCol)) {
+                        profile[nextRow][nextCol] = true;
+                    }
+                }
+
+                return profile;
+            }
+
+            function getKnightMoves(boardArray, profile, row, col, isWhite) {
+                var friendlyOccupied; var enemyOccupied;
+                if(isWhite) {
+                    friendlyOccupied = whiteOccupied;
+                    enemyOccupied = blackOccupied;
+                } else {
+                    friendlyOccupied = blackOccupied;
+                    enemyOccupied = whiteOccupied;
+                }
+
+                var directions = [
+                    [ 2,  1],
+                    [ 2, -1],
+                    [ 1,  2],
+                    [-1,  2],
+                    [-2,  1],
+                    [-2, -1],
+                    [ 1, -2],
+                    [-1, -2]
+                ]
+
+                for(var d = 0; d < directions.length; d++) {
+                    var nextRow; var nextCol;
+                    
+                    nextRow = row + directions[d][0];
+                    nextCol = col + directions[d][1];
+                    if(inBounds(nextRow, nextCol) && !friendlyOccupied(boardArray, nextRow, nextCol)) {
+                        profile[nextRow][nextCol] = true;
+                    }
+                }
+
+                return profile;
+            }
+
+            function addPieceMoves(boardArray, profile, row, col) {
+                var pieceID = boardArray[row][col];
+                var isWhite = (pieceID.charAt(0) === "w");
+                var piece = pieceID.charAt(1).toUpperCase();
+
+                switch(piece) {
+                    case "P": //pawn
+                        profile = getPawnMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "F": //ferz
+                        profile = getFerzMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "V": //vizier
+                        profile = getVizierMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "K": //king
+                        profile = getFerzMoves(boardArray, profile, row, col, isWhite);
+                        profile = getVizierMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "M": //man
+                        profile = getFerzMoves(boardArray, profile, row, col, isWhite);
+                        profile = getVizierMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "N": //knight
+                        profile = getKnightMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "B": //bishop
+                        profile = getBishopMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "R": //rook
+                        profile = getRookMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "A": //archbishop
+                        profile = getKnightMoves(boardArray, profile, row, col, isWhite);
+                        profile = getBishopMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "C": //chancellor
+                        profile = getKnightMoves(boardArray, profile, row, col, isWhite);
+                        profile = getRookMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "Q": //queen
+                        profile = getBishopMoves(boardArray, profile, row, col, isWhite);
+                        profile = getRookMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                    case "D": //dragon
+                        profile = getKnightMoves(boardArray, profile, row, col, isWhite);
+                        profile = getBishopMoves(boardArray, profile, row, col, isWhite);
+                        profile = getRookMoves(boardArray, profile, row, col, isWhite);
+                        break;
+                }
+
+                return profile;
+            }
+
+            function getPieceMoves(boardArray, row, col) {
+                var profile = getMoveProfile();
+                profile = addPieceMoves(boardArray, profile, row, col);
+                return profile;
+            }
+
+            function getMasterProfile(boardArray, isWhite) {
+                var masterProfileKeyOutput = Array(0);
+                var masterProfileOutput = Array(0);
+
+                var color = isWhite ? "w" : "b";
+                for(var r = 0; r < height; r++) {
+                    for(var c = 0; c < width; c++) {
+                        if(!(boardArray[r][c] === "") && boardArray[r][c].charAt(0) === color) {
+                            masterProfileKeyOutput.push(`#r${r}c${c}`);
+
+                            var profile = getMoveProfile();
+                            profile = addPieceMoves(boardArray, profile, r, c);
+                            masterProfileOutput.push(profile);
+                        }
+                    }
+                }
+
+                return [masterProfileKeyOutput, masterProfileOutput];
+            }
+
+            function getCombinedProfile(boardArray, isWhite) {
+                var masterProfileData = getMasterProfile(boardArray, isWhite)[1];
+                var combinedProfile = getMoveProfile();
+                for(var i = 0; i < masterProfileData.length; i++) {
+                    for(var r = 0; r < height; r++) {
+                        for(var c = 0; c < width; c++) {
+                            if(masterProfileData[i][r][c]) {
+                                combinedProfile[r][c] = true;
+                            }
+                        }
+                    }
+                }
+                return combinedProfile;
+            }
+
+            function getCurrentMasterProfile(isWhite) {
+                var masterProfileOutput = getMasterProfile(currentBoard, isWhite);
+                var masterProfileOutputKey = masterProfileOutput[0];
+                var masterProfileOutputData = masterProfileOutput[1];
+
+                var boardSim;
+                for(var i = 0; i < masterProfileOutputKey.length; i++) {
+                    var startRow = extractRow(masterProfileOutputKey[i]);
+                    var startCol = extractCol(masterProfileOutputKey[i]);
+                    for(var r = 0; r < height; r++) {
+                        for(var c = 0; c < width; c++) {
+                            if(masterProfileOutputData[i][r][c]) {
+                                boardSim = simulateMove(makeBoardCopy(currentBoard), startRow, startCol, r, c);
+                                if(inCheck(boardSim, isWhite)) {
+                                    masterProfileOutputData[i][r][c] = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return [masterProfileOutputKey, masterProfileOutputData];
+            }
+
+            //initialization
+            constructBoardContainer(1, 1);
+            constructPromotionBar();
+            constructBoard(playerWhite);
+
+            chatSocket.onopen = function(e) {
+                console.log("Connection set up successfully");
+                requestMirror();
+            };
+            chatSocket.onclose = function(e) {
+                console.log("Unexpected failure")
+            };
+
+            //manage click events
+            $("document").ready(function() { //manage piece selections
+                $(".square").click(function() {
+                    if($(this).hasClass("clickable")) {
+                        if($(this).hasClass("selected")) {
+                            removeSelection();
+                            removeAllIndicators();
+                        } else {
+                            var row = extractRow($(this).get(0).id);
+                            var col = extractCol($(this).get(0).id);
+                            selectSquare(row, col);
+
+                            var profile = masterProfile[masterProfileKey.indexOf(`#r${row}c${col}`)];
+                            addAllIndicators(profile);
+                        }
+                    }
+                });
+            });
+
+            $("document").ready(function() { //manage moves
+                $(".square").click(function() {
+                    if($(this).hasClass("has-indicator")) {
+                        var selection = $(".selected").get(0);
+
+                        var startRow = extractRow(selection.id);
+                        var startCol = extractCol(selection.id);
+
+                        var endRow = extractRow($(this).get(0).id);
+                        var endCol = extractCol($(this).get(0).id);
+
+                        currentBoard = makeMove(currentBoard, startRow, startCol, endRow, endCol);
+                        
+                        whiteTurn = !whiteTurn;
+                        mirrorState();
+                    }
+                });
+            });
+        </script>
+    </body>
+</html>
